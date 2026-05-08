@@ -23,6 +23,7 @@
 
 fd_set readfds;
 char buf[MAX_LINE];
+char *listen_addr = NULL;
 
 struct service {
   int fd;
@@ -113,7 +114,7 @@ void openSocket(struct service *service) {
   }
   hints.ai_family = AF_UNSPEC;
   hints.ai_flags = AI_PASSIVE;
-  if (getaddrinfo(NULL, service -> line[0], &hints, &result) != 0) {
+  if (getaddrinfo(listen_addr, service -> line[0], &hints, &result) != 0) {
     syslog(LOG_ERR, "Error from getaddrinfo(): %m");
     exit(EXIT_FAILURE);
   }
@@ -215,17 +216,23 @@ void sigChldHandler(int sig) {
 static void usageError(char *progName, char *msg, int opt) {
   if (msg != NULL && opt != 0)
   fprintf(stderr, "%s (-%c)\n", msg, printable(opt));
-  fprintf(stderr, "Usage: %s [-c config_path]\n", progName);
+  fprintf(stderr, "Usage: %s [-c config_path] [-h listen_addr]\n", progName);
   exit(EXIT_FAILURE);
 }
 
 int main(int argc, char *argv[]) {
   int opt;
-  char *confStr = "/etc/inted.conf";
-  while ((opt = getopt(argc, argv, ":c:")) != -1) {
+#ifndef DEFAULT_CONF_PATH
+#define DEFAULT_CONF_PATH "/etc/inetd.conf"
+#endif
+  char *confStr = DEFAULT_CONF_PATH;
+  while ((opt = getopt(argc, argv, ":c:h:")) != -1) {
     switch (opt) {
     case 'c':
       confStr = optarg;
+      break;
+    case 'h':
+      listen_addr = optarg;
       break;
     case ':':
       usageError(argv[0], "Missing argument", optopt);
