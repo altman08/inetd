@@ -168,7 +168,9 @@ char** parseLine(char *buf) {
 }
 
 void setupFd(int nfds, int fd) {
-  for (int fdi = 0; fdi < nfds; fdi++) {
+  int max_fd = (int)sysconf(_SC_OPEN_MAX);
+  if (max_fd < nfds) max_fd = nfds;
+  for (int fdi = 0; fdi < max_fd; fdi++) {
     if (fdi == fd) continue;
     close(fdi);
   }
@@ -216,7 +218,7 @@ void sigChldHandler(int sig) {
 static void usageError(char *progName, char *msg, int opt) {
   if (msg != NULL && opt != 0)
   fprintf(stderr, "%s (-%c)\n", msg, printable(opt));
-  fprintf(stderr, "Usage: %s [-c config_path] [-h listen_addr]\n", progName);
+  fprintf(stderr, "Usage: %s [-f] [-c config_path] [-l listen_addr]\n", progName);
   exit(EXIT_FAILURE);
 }
 
@@ -226,12 +228,16 @@ int main(int argc, char *argv[]) {
 #define DEFAULT_CONF_PATH "/etc/inetd.conf"
 #endif
   char *confStr = DEFAULT_CONF_PATH;
-  while ((opt = getopt(argc, argv, ":c:h:")) != -1) {
+  int foreground = 0;
+  while ((opt = getopt(argc, argv, ":fc:l:")) != -1) {
     switch (opt) {
+    case 'f':
+      foreground = 1;
+      break;
     case 'c':
       confStr = optarg;
       break;
-    case 'h':
+    case 'l':
       listen_addr = optarg;
       break;
     case ':':
@@ -249,7 +255,7 @@ int main(int argc, char *argv[]) {
   int nfds = 0;
   FD_ZERO(&readfds);
 
-  daemon(0, 0);
+  if (!foreground) daemon(0, 0);
 
   FILE *cf = fopen(confStr, "r");
   if (cf == NULL) {
@@ -258,19 +264,20 @@ int main(int argc, char *argv[]) {
   }
 
   while (fgets(buf, MAX_LINE, cf) != NULL) {
-    if (buf[0] == '#') continue;
+    if (buf[0] == '#' || buf[0] == '\n' || buf[0] == '\r') continue;
 
     char **line = parseLine(buf);
+    if (line[0] == NULL) { free(line); continue; }
     struct service *service = getService(line);
     openSocket(service);
 
-    nfds = service -> fd + 1;
+    if (service -> fd + 1 > nfds) nfds = service -> fd + 1;
     FD_SET(service -> fd, &readfds);
   }
 
   for (;;) {
     fd_set readfdsDup = readfds;
-    if (select(nfds, &readfdsDup, NULL, NULL, 0) == -1) {
+    if (select(nfds, &readfdsDup, NULL, NULL, NULL) == -1) {
       if (errno == EINTR) continue;
 
       syslog(LOG_ERR, "Error from select(): %m");
@@ -298,16 +305,17 @@ int main(int argc, char *argv[]) {
           } else if (pid == 0) {
             setUGId(service);
             if (service -> wait) {
-              service -> pid = getpid();
               setupFd(nfds, fd);
             } else {
               setupFd(nfds, cfd);
             }
-            execv(service -> line[5], service -> line + 5);
+            execv(service -> line[5], service -> line + 6);
             syslog(LOG_ERR, "Error from execv(): %m");
             _exit(EXIT_FAILURE);
           }
-          if (!service -> wait) {
+          if (service -> wait) {
+            service -> pid = pid;
+          } else {
             close(cfd);
           }
 
@@ -322,7 +330,7 @@ int main(int argc, char *argv[]) {
           } else if (pid == 0) {
             setUGId(service);
             setupFd(nfds, fd);
-            execv(service -> line[5], service -> line + 5);
+            execv(service -> line[5], service -> line + 6);
             syslog(LOG_ERR, "Error from execv(): %m");
             _exit(EXIT_FAILURE);
           }
